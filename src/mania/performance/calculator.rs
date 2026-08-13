@@ -31,6 +31,10 @@ impl ManiaPerformanceCalculator<'_> {
             multiplier *= 0.90;
         }
 
+        if self.mods.hr() {
+            multiplier *= 1.1;
+        }
+
         let score_accuracy = self.calculate_custom_accuracy();
 
         let difficulty_value = self.compute_difficulty_value(score_accuracy);

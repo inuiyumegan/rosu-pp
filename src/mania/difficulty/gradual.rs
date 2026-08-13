@@ -164,14 +164,17 @@ impl Iterator for ManiaGradualDifficulty {
 
         self.idx += 1;
 
-        let classic = (!self.difficulty.get_lazer() && !self.difficulty.get_mods().sv2())
-            || self.difficulty.get_mods().cl();
+        let mods = self.difficulty.get_mods();
+        let classic = (!self.difficulty.get_lazer() && !mods.sv2()) || mods.cl();
 
         let params = super::rebirth::calculate_params_for_objects(
             self.total_columns,
             self.od,
             self.clock_rate,
             classic,
+            self.is_convert,
+            mods.hr(),
+            mods.ez(),
             self.mania_objects.iter().take(self.idx).copied(),
         );
 

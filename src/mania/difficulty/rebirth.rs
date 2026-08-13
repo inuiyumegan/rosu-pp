@@ -144,7 +144,16 @@ pub(super) fn calculate_params(difficulty: &Difficulty, map: &Beatmap) -> Rebirt
         .map(|h| ManiaObject::new(h, total_columns as f32, &mut params))
         .take(take);
 
-    calculate_params_for_objects(total_columns, map.od, clock_rate, is_classic(difficulty), objects)
+    calculate_params_for_objects(
+        total_columns,
+        map.od,
+        clock_rate,
+        is_classic(difficulty),
+        map.is_convert,
+        difficulty.get_mods().hr(),
+        difficulty.get_mods().ez(),
+        objects,
+    )
 }
 
 pub(super) fn calculate_stars_for_objects(
@@ -152,9 +161,12 @@ pub(super) fn calculate_stars_for_objects(
     od: f32,
     clock_rate: f64,
     classic: bool,
+    is_convert: bool,
+    hr: bool,
+    ez: bool,
     objects: impl IntoIterator<Item = ManiaObject>,
 ) -> f64 {
-    calculate_params_for_objects(total_columns, od, clock_rate, classic, objects).sr
+    calculate_params_for_objects(total_columns, od, clock_rate, classic, is_convert, hr, ez, objects).sr
 }
 
 pub(super) fn calculate_params_for_objects(
@@ -162,9 +174,12 @@ pub(super) fn calculate_params_for_objects(
     od: f32,
     clock_rate: f64,
     classic: bool,
+    is_convert: bool,
+    hr: bool,
+    ez: bool,
     objects: impl IntoIterator<Item = ManiaObject>,
 ) -> RebirthParams {
-    let Some(data) = prepare_data(total_columns, od, clock_rate, objects) else {
+    let Some(data) = prepare_data(total_columns, od, clock_rate, is_convert, hr, ez, objects) else {
         return RebirthParams::default();
     };
 
@@ -182,6 +197,9 @@ fn prepare_data(
     total_columns: usize,
     od: f32,
     clock_rate: f64,
+    is_convert: bool,
+    hr: bool,
+    ez: bool,
     objects: impl IntoIterator<Item = ManiaObject>,
 ) -> Option<RebirthData> {
     let mut notes = build_notes(clock_rate, objects);
@@ -216,7 +234,7 @@ fn prepare_data(
 
     Some(RebirthData {
         total_columns,
-        hit_leniency: hit_leniency(f64::from(od)),
+        hit_leniency: hit_leniency(f64::from(od), is_convert, clock_rate, hr, ez),
         t_end,
         notes,
         notes_by_column,
@@ -251,8 +269,33 @@ fn compare_notes(a: &Note, b: &Note) -> Ordering {
         .then_with(|| a.column.cmp(&b.column))
 }
 
-fn hit_leniency(od: f64) -> f64 {
-    let x = 0.3 * ((64.5 - (od * 3.0).ceil()) / 500.0).sqrt();
+/// Hit window of the 300 judgement, adjusted for the clock rate and the
+/// HR/EZ mods, matching the reference implementation's `getHitWindow300`
+/// and `SunnySkill` x computation.
+fn hit_leniency(od: f64, is_convert: bool, clock_rate: f64, hr: bool, ez: bool) -> f64 {
+    // Base 300 hit window in milliseconds at 1x rate.
+    let base = if is_convert {
+        // Converted maps (osu!standard -> mania) use fixed windows.
+        if od.round_ties_even() > 4.0 { 34.0 } else { 47.0 }
+    } else {
+        let anti_od = (10.0 - od).clamp(0.0, 10.0);
+        34.0 + 3.0 * anti_od
+    };
+
+    // Apply the clock rate and mod adjustments, then round like the
+    // reference does (truncate + 0.5, back to 1x rate).
+    let mut value = base * clock_rate;
+    value += 1e-6;
+
+    if hr {
+        value /= 1.4;
+    } else if ez {
+        value *= 1.4;
+    }
+
+    value = (value as i64 as f64 + 0.5) / clock_rate;
+
+    let x = 0.3 * (value / 500.0).sqrt();
     x.min(0.6 * (x - 0.09) + 0.09)
 }
 
@@ -1196,7 +1239,20 @@ mod tests {
 
     #[test]
     fn hit_leniency_matches_reference_formula() {
-        assert!((hit_leniency(8.0) - 0.08538149682454625).abs() < 1e-12);
+        // NM (no mods, 1x rate, non-convert) is identical to the reference.
+        assert!((hit_leniency(8.0, false, 1.0, false, false) - 0.08538149682454625).abs() < 1e-12);
+    }
+
+    #[test]
+    fn hit_leniency_applies_mod_adjustments() {
+        let nm = hit_leniency(8.0, false, 1.0, false, false);
+        let dt = hit_leniency(8.0, false, 1.5, false, false);
+        let ez = hit_leniency(8.0, false, 1.0, false, true);
+        let hr = hit_leniency(8.0, false, 1.0, true, false);
+
+        assert!(dt < nm, "DT rounds the window smaller");
+        assert!(ez > nm, "EZ widens the window");
+        assert!(hr < nm, "HR tightens the window");
     }
 
     #[test]
